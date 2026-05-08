@@ -1,0 +1,22 @@
+# GPU override for Lightning AI / local GPU machines
+# Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# Or:   make start-gpu
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  backend:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
