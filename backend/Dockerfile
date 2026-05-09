@@ -1,52 +1,41 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# RAG Backend Dockerfile
-#
-# Multi-arch: works on x86-64 (Lightning AI / cloud) AND arm64 (Mac M1/M2/M3)
-# Python 3.11-slim · uv for fast dependency installs
-# ─────────────────────────────────────────────────────────────────────────────
+# Multi-stage build for backend
+FROM python:3.11-slim AS builder
 
-# TARGETPLATFORM is injected by BuildKit (linux/amd64 or linux/arm64).
-# Using python:3.11-slim which ships both amd64 and arm64 layers.
-FROM --platform=${TARGETPLATFORM:-linux/amd64} python:3.11-slim
+WORKDIR /build
 
-# ── System dependencies ─────────────────────────────────────────────────────
-# ffmpeg  : audio transcription (whisper)
-# libpq-dev: asyncpg / psycopg2 native bindings
-# curl    : healthcheck probe
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
     build-essential \
-    gcc \
-    g++ \
-    libpq-dev \
-    curl \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and build wheels
+COPY backend/requirements.txt .
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+# Final stage
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# ── Install uv (fast Python package manager) ─────────────────────────────
-RUN pip install --no-cache-dir uv
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 
-# ── Copy dependency manifests first (layer cache friendly) ────────────────
-COPY pyproject.toml ./
+# Copy Python dependencies from builder
+COPY --from=builder /root/.local /root/.local
 
-# ── Copy source ───────────────────────────────────────────────────────────
-COPY backend ./backend
-COPY documents ./documents
+# Set environment variables
+ENV PATH=/root/.local/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-# ── Install all Python deps ───────────────────────────────────────────────
-# --system: install into the system Python (no venv needed inside container)
-# --no-cache: keep image lean
-RUN uv pip install --system --no-cache -e .
+# Copy application code
+COPY backend/app/ ./app/
 
-# ── Runtime env ──────────────────────────────────────────────────────────
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-
+# Expose port
 EXPOSE 8000
 
-# ── Health check (generous start-period for model loading) ────────────────
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
-    CMD curl -sf http://localhost:8000/health || exit 1
-
-CMD ["python", "-m", "backend.main"]
+# Run the application
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
